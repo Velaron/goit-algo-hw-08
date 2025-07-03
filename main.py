@@ -2,6 +2,7 @@ import functools
 import pickle
 import sys
 import datetime
+from abc import ABC, abstractmethod
 from collections import UserDict
 from typing import Callable, Any
 
@@ -12,9 +13,9 @@ def input_error(func: Callable) -> Callable:
         try:
             return func(self, *args, **kwargs)
         except TypeError as e:
-            print(f"Invalid arguments. Usage:\n{self.help}")
+            self.bot.interface.show_message(f"Invalid arguments. Usage:\n{self.help}")
         except ValueError as e:
-            print(f"{e}")
+            self.bot.interface.show_message(f"{e}")
 
     return wrapper
 
@@ -75,6 +76,7 @@ class Birthday(Field):
 class Record:
     name: Name
     phones: list[Phone]
+    birthday: Birthday | None
 
     def __init__(self, name: str):
         self.name = Name(name)
@@ -153,11 +155,13 @@ class Command:
     __names: list[str]
     __func: Callable
     __help: str
+    bot: "Bot"
 
-    def __init__(self, names: str | list[str], func: Callable, help_str: str):
+    def __init__(self, bot: "Bot", names: str | list[str], func: Callable, help_str: str):
         self.names = names
         self.__func = func
         self.__help = help_str
+        self.bot = bot
 
     @property
     def names(self) -> list[str]:
@@ -176,16 +180,43 @@ class Command:
         return f"{', '.join(self.__names)}{': ' + self.__help if self.__help else ''}"
 
 
+class BotInterface(ABC):
+    @abstractmethod
+    def get_input(self, prompt: str) -> str:
+        pass
+
+    @abstractmethod
+    def show_message(self, message: str):
+        pass
+
+    @abstractmethod
+    def show_help(self, help_str: str):
+        pass
+
+
+class ConsoleInterface(BotInterface):
+    def get_input(self, prompt: str) -> str:
+        return input(prompt)
+
+    def show_message(self, message: str):
+        print(message)
+
+    def show_help(self, help_str: str):
+        print(help_str)
+
+
 class Bot:
     __book: AddressBook
     __commands: list[Command]
+    interface: BotInterface
 
     def __init__(self):
         self.__book = self.__load_data()
         self.__commands = []
+        self.interface = ConsoleInterface()
 
     def add_command(self, name: str | list[str], cmd: Callable, help_str: str = ""):
-        self.__commands.append(Command(name, cmd, help_str))
+        self.__commands.append(Command(self, name, cmd, help_str))
 
     def __parse_input(self, user_input: str) -> tuple[None, list[Any]] | tuple[str, list[str]]:
         parts = user_input.strip().split()
@@ -198,11 +229,10 @@ class Bot:
 
         return cmd, args
 
-    def print_help(self):
-        print("Available commands:")
-
-        for cmd in self.__commands:
-            print(f"  {cmd.help}")
+    def __get_help(self, title: str = "Available commands:") -> str:
+        help_str = f"{title}\n"
+        help_str += "\n".join([cmd.help for cmd in self.__commands])
+        return help_str
 
     def get_help_for_cmd(self, name: str) -> str:
         for cmd in self.__commands:
@@ -216,19 +246,17 @@ class Bot:
             with open(filename, "wb") as f:
                 pickle.dump(self.__book, f)
         except Exception as e:
-            print(f"An unexpected error occurred: {e}")
+            self.interface.show_message(f"An unexpected error occurred: {e}")
 
     def __load_data(self, filename: str = "addressbook.pkl"):
         try:
             with open(filename, "rb") as f:
                 return pickle.load(f)
         except Exception as e:
-            print(f"An unexpected error occurred: {e}")
+            self.interface.show_message(f"An unexpected error occurred: {e}")
             return AddressBook()
 
     def run(self):
-        print("Welcome to the assistant bot!")
-
         self.add_command("hello", self.hello)
         self.add_command(["exit", "close"], self.exit)
         self.add_command("add", self.add_number, "[name] [number]")
@@ -239,24 +267,23 @@ class Bot:
         self.add_command("show-birthday", self.show_birthday, "[name]")
         self.add_command("birthdays", self.get_birthdays)
 
-        self.print_help()
+        self.interface.show_help(self.__get_help("Welcome to the assistant bot!"))
 
         while True:
-            user_input = input("Enter a command: ")
+            user_input = self.interface.get_input("Enter a command: ")
             cmd_str, args = self.__parse_input(user_input)
             cmd = next((c for c in self.__commands if cmd_str in c.names), None)
 
             if cmd:
                 cmd.execute(*args)
             else:
-                print("Invalid command.")
-                self.print_help()
+                self.interface.show_help(self.__get_help("Invalid command."))
 
     def hello(self, *_):
-        print("Hello, how can I help you?")
+        self.interface.show_message("Hello, how can I help you?")
 
     def exit(self, *_):
-        print("Goodbye!")
+        self.interface.show_message("Goodbye!")
         sys.exit()
 
     def add_number(self, name: str, number: str):
@@ -266,7 +293,7 @@ class Bot:
                 raise ValueError("Phone number already exists.")
 
             record.add_phone(number)
-            print(f"Added number '{number}' to contact '{name}'.")
+            self.interface.show_message(f"Added number '{number}' to contact '{name}'.")
             return
 
         record = Record(name)
@@ -274,7 +301,7 @@ class Bot:
 
         self.__book.add_record(record)
 
-        print(f"Contact '{name}' with number '{number}' added.")
+        self.interface.show_message(f"Contact '{name}' with number '{number}' added.")
 
     def change_number(self, name: str, old_num: str, new_num: str):
         record = self.__book.find(name)
@@ -283,35 +310,35 @@ class Bot:
                 raise ValueError(f"Number '{new_num}' already exists.")
 
             record.edit_phone(old_num, new_num)
-            print(f"Number changed from '{old_num}' to '{new_num}' for contact '{name}'.")
+            self.interface.show_message(f"Number changed from '{old_num}' to '{new_num}' for contact '{name}'.")
         else:
             raise ValueError(f"Contact '{name}' not found.")
 
     def show_phone(self, name: str):
         record = self.__book.find(name)
         if record:
-            print(str(record))
+            self.interface.show_message(str(record))
         else:
             raise ValueError(f"Contact '{name}' not found.")
 
     def show_all(self, *_):
         if not len(self.__book):
-            print("No contacts stored.")
+            self.interface.show_message("No contacts stored.")
         else:
-            print(self.__book)
+            self.interface.show_message(str(self.__book))
 
     def add_birthday(self, name: str, birthday: str):
         record = self.__book.find(name)
         if record:
             record.add_birthday(birthday)
-            print(f"{name}'s birthday is {birthday}.")
+            self.interface.show_message(f"{name}'s birthday is {birthday}.")
         else:
             raise ValueError(f"Contact '{name}' not found.")
 
     def show_birthday(self, name: str):
         record = self.__book.find(name)
         if record:
-            print(f"{name}'s birthday is {record.birthday}.")
+            self.interface.show_message(f"{name}'s birthday is {record.birthday}.")
         else:
             raise ValueError(f"Contact '{name}' not found.")
 
@@ -319,11 +346,11 @@ class Bot:
         birthdays = self.__book.get_upcoming_birthdays()
 
         if len(birthdays):
-            print("Upcoming birthdays:")
-            for b in birthdays:
-                print(f"  {b['name']} - {b['birthday']}")
+            birthdays_str = "Upcoming birthdays:\n"
+            birthdays_str += "\n  ".join([f"{b['name']} - {b['birthday']}" for b in birthdays])
+            self.interface.show_message(birthdays_str)
         else:
-            print("No upcoming birthdays.")
+            self.interface.show_message("No upcoming birthdays.")
 
 
 def main():
@@ -331,6 +358,8 @@ def main():
 
     try:
         bot.run()
+    except KeyboardInterrupt:
+        bot.exit()
     finally:
         bot.save_data()
 
