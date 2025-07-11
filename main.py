@@ -211,9 +211,9 @@ class Bot:
     interface: BotInterface
 
     def __init__(self):
+        self.interface = ConsoleInterface()
         self.__book = self.__load_data()
         self.__commands = []
-        self.interface = ConsoleInterface()
 
     def add_command(self, name: str | list[str], cmd: Callable, help_str: str = ""):
         self.__commands.append(Command(self, name, cmd, help_str))
@@ -252,6 +252,8 @@ class Bot:
         try:
             with open(filename, "rb") as f:
                 return pickle.load(f)
+        except FileNotFoundError:
+            return AddressBook()
         except Exception as e:
             self.interface.show_message(f"An unexpected error occurred: {e}")
             return AddressBook()
